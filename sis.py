@@ -1,6 +1,15 @@
 import numpy as np
 
-def simulate_SIS(A,SIS_opts):    
+def simulate_SIS(A,SIS_opts):
+    
+    # A is the adjacency matrix
+    # SIS_opts['T'] - number of time steps
+    # SIS_opts['gamma'] - spreading rate
+    # SIS_opts['eta'] - external infection rate
+    # SIS_opts['etas'] - set of external infection rate
+    # SIS_opts['beta'] - healing rate
+    
+    
     N = len(A)
     X = np.zeros((SIS_opts['T'],N))
     x = SIS_opts['x0'].copy()
@@ -17,7 +26,7 @@ def simulate_SIS(A,SIS_opts):
     return X    
 
 def get_p_curve(A,SIS_opts,gammas,delay):
-    ps = zeros(len(gammas))
+    ps = np.zeros(len(gammas))
     for i,gamma in enumerate(gammas):
         print(i/len(gammas))
         SIS_opts['gamma'] = gamma
