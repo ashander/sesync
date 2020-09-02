@@ -69,11 +69,12 @@ def get_info_to_control(info_to_rank, rank_opts):
     return fn
 
 
-def flatten_ranks(ranks):
+def flatten_by_turns(manager_vec):
     # return
     #
-    # ranks in iterating order over the managers
-    return np.array(list(chain.from_iterable(zip_longest(*ranks))))
+    # flattens over the managers in turn as would be done by
+    # numpy.matrix().flatten() if the managers vecs in columns
+    return np.array(list(chain.from_iterable(zip_longest(*manager_vec))))
 
 def decrease_nodes_weights(A,node_ids,p=.5):
     ## TODO add management mask
@@ -81,11 +82,21 @@ def decrease_nodes_weights(A,node_ids,p=.5):
     mask = create_or_mask(N,node_ids) # the weights of these edges will decrease
     return A - (mask*A)*p 
 
-def decrease_top_nodes_weights(A, k, info_to_control, p=0.5):
-    ranks = info_to_control(A)
-    global_rank = flatten_ranks(ranks)
+def decrease_top_nodes_weights(A, k, ranker, p=0.5):
+    ranks = ranker(A)
+    global_rank = flatten_by_turns(ranks)
     AA  = decrease_nodes_weights(A, global_rank[:k], p)
     return AA
+
+def manage_for_budget(ranks, budgets):
+    # ranks - iterable of integer-vectors
+    #   that rank controllable nodes
+    # budgets - iterable of integers defining max budget
+    #
+    # return
+    # 
+    # iterable of integer-vectors that go up to the (max) budget
+    return (ctl[:b] for ctl, b in zip(ranks, budgets))
 
 def manage_nodes(A, rank_opts,manage_opts):
     # management of a network by k managers, potentially cooperative
@@ -102,32 +113,34 @@ def manage_nodes(A, rank_opts,manage_opts):
     # rank_opts['budget'] -  iterable of length k, with each element an integer defining maximum budget
     # rank_opts['manage_id_sets'] -  iterable of length k, with each element an integer defining maximum budget
     #
+    # manage_opts['num_managers'] - num managers (optional) if not present set to len control_id_sets
     # manage_opts['online'] - if true, adaptively compute management during selection, otherwise
     #                         compute management from inital state of network
     #
     # return AA final adjacency matrix after management, 
     #        lams vector of dominant eigenvalues during management
     # 
+
     budgets = rank_opts['budget']
     B = int(np.sum(budgets))
-    Ks = np.arange(0, B, len(budgets), dtype='int')
+    try:
+        K = manage_opts['num_managers']
+    except KeyError:
+        K = len(budgets)
+    Ks = np.arange(0, B, K, dtype='int')
     info_to_rank = get_info_to_rank(rank_opts)
     info_to_control = get_info_to_control(info_to_rank, rank_opts)
 
-    #compute ranks just once
     if manage_opts['online']==False:
-        # logic: map a function across budgets that returns node_ids, ranked
-        ranks = info_to_control(A) # retuns a manager-element list with ranks in descending order
-        global_rank = flatten_ranks(ranks)
+        # compute ranks just once
+        # logic here is to get a manager-length iterable that ranks in descending order
+        # the nodes that will be managed up to the max budget
+        # we then 'flatten' those in a turn based way (all managers 1st choices occur
+        # before any managers 2nd chioces)
+        ranks = info_to_control(A)
+        management_plans = manage_for_budget(ranks, budgets)
 
-        # within each list
-        # so add for loop here that encodes info logic of rankings (pooled or not)
-
-        # later down... separate for loop with budget etc and the function that
-        # decreases weight would go through each manager iteratively and they choose
-        # which to manage -- intersect teh manager patches w/ full ranks (subset managed)
-        #print(ranks[:4])
-
+        global_rank = flatten_by_turns(management_plans)
 
         lams = np.zeros(len(Ks)) # Ks is jumps by K= num managers
         for t,k in enumerate(Ks):
@@ -135,11 +148,15 @@ def manage_nodes(A, rank_opts,manage_opts):
             lams[t],_ = get_dom_eval_and_evec(AA)
             
     if manage_opts['online']==True:
-        # assumes
+        # compute ranks after every round of manager choices
+        # logic here is the same, ranks are computed for every value in Ks
+        # this conflates the budget determination and the Ks steps --
+        # could cause errors so should find a better way to do this
         AA = A.copy()
         lams = np.ones(len(Ks))
         for t,k in enumerate(Ks):
             lams[t],_ = get_dom_eval_and_evec(AA)
-            AA = decrease_top_nodes_weights(AA, Ks[1]-Ks[0], info_to_control, p=manage_opts['p'])
+            AA = decrease_top_nodes_weights(AA, k=Ks[1]-Ks[0],
+                    ranker=info_to_control, p=manage_opts['p'])
     
     return AA,lams
