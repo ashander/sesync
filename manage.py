@@ -35,13 +35,11 @@ def create_or_mask(N,ids):
     mask = mm.repmat(mask,N,1)          
     return np.logical_or(mask,mask.T)
 
-
-
 def get_info_to_rank(rank_opts):
     # returns
     #   method to rank nodes this is a function that
     #   takes adj mat A as an argument and returns a iterable of integer-vectors
-    #   that rank
+    #   that rank all known nodes
     
     if rank_opts['type']=='random': # select node uniformly at random
         fn = lambda A: [np.random.permutation(len(A))]
@@ -60,8 +58,21 @@ def get_info_to_rank(rank_opts):
 
     return fn
 
+def get_info_to_control(info_to_rank, rank_opts):
+    # returns
+    #   method to return ranked control nodes this is a function that
+    #   takes adj mat A as an argument and returns a iterable of integer-vectors
+    #   that rank all known nodes
+    
+    fn = lambda A: (ir[np.isin(ir, ctl)] for ir, ctl in
+            zip(info_to_rank(A), rank_opts['control_id_sets']))
+    return fn
+
 
 def flatten_ranks(ranks):
+    # return
+    #
+    # ranks in iterating order over the managers
     return np.array(list(chain.from_iterable(zip_longest(*ranks))))
 
 def decrease_nodes_weights(A,node_ids,p=.5):
@@ -70,10 +81,10 @@ def decrease_nodes_weights(A,node_ids,p=.5):
     mask = create_or_mask(N,node_ids) # the weights of these edges will decrease
     return A - (mask*A)*p 
 
-def decrease_top_nodes_weights(A, k, info_to_rank, p=0.5):
-    ranks = info_to_rank(A)
-    ranking = flatten_ranks(ranks)
-    AA  = decrease_nodes_weights(A,ranking[:k],p)
+def decrease_top_nodes_weights(A, k, info_to_control, p=0.5):
+    ranks = info_to_control(A)
+    global_rank = flatten_ranks(ranks)
+    AA  = decrease_nodes_weights(A, global_rank[:k], p)
     return AA
 
 def manage_nodes(A, rank_opts,manage_opts):
@@ -86,6 +97,8 @@ def manage_nodes(A, rank_opts,manage_opts):
     # rank_opts['custom'] - allow input of any function with any arguments
     # rank_opts['info_id_sets'] -  iterable of length k, each element defines
     #                the information that manager k knows 
+    # rank_opts['control_id_sets'] -  iterable of length k, each element defines
+    #                the nodes that manager k controls 
     # rank_opts['budget'] -  iterable of length k, with each element an integer defining maximum budget
     # rank_opts['manage_id_sets'] -  iterable of length k, with each element an integer defining maximum budget
     #
@@ -99,12 +112,13 @@ def manage_nodes(A, rank_opts,manage_opts):
     B = int(np.sum(budgets))
     Ks = np.arange(0, B, len(budgets), dtype='int')
     info_to_rank = get_info_to_rank(rank_opts)
+    info_to_control = get_info_to_control(info_to_rank, rank_opts)
 
     #compute ranks just once
     if manage_opts['online']==False:
         # logic: map a function across budgets that returns node_ids, ranked
-        ranks = info_to_rank(A) # retuns a manager-element list with ranks in descending order
-        ranking = flatten_ranks(ranks)
+        ranks = info_to_control(A) # retuns a manager-element list with ranks in descending order
+        global_rank = flatten_ranks(ranks)
 
         # within each list
         # so add for loop here that encodes info logic of rankings (pooled or not)
@@ -117,7 +131,7 @@ def manage_nodes(A, rank_opts,manage_opts):
 
         lams = np.zeros(len(Ks)) # Ks is jumps by K= num managers
         for t,k in enumerate(Ks):
-            AA  = decrease_nodes_weights(A,node_ids=ranking[:k],p=manage_opts['p'])
+            AA  = decrease_nodes_weights(A,node_ids=global_rank[:k],p=manage_opts['p'])
             lams[t],_ = get_dom_eval_and_evec(AA)
             
     if manage_opts['online']==True:
@@ -126,6 +140,6 @@ def manage_nodes(A, rank_opts,manage_opts):
         lams = np.ones(len(Ks))
         for t,k in enumerate(Ks):
             lams[t],_ = get_dom_eval_and_evec(AA)
-            AA = decrease_top_nodes_weights(AA, Ks[1]-Ks[0], info_to_rank, p=manage_opts['p'])
+            AA = decrease_top_nodes_weights(AA, Ks[1]-Ks[0], info_to_control, p=manage_opts['p'])
     
     return AA,lams
