@@ -159,4 +159,4 @@ def manage_nodes(A, rank_opts,manage_opts):
             AA = decrease_top_nodes_weights(AA, k=Ks[1]-Ks[0],
                     ranker=info_to_control, p=manage_opts['p'])
     
-    return AA,lams
+    return AA, lams, Ks
