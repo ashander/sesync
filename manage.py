@@ -1,4 +1,3 @@
-from functools import reduce
 from itertools import chain, zip_longest
 import numpy as np
 
@@ -16,21 +15,13 @@ def rank_by_evec(A):
     rank = np.argsort(-u)
     return rank
 
-def distributed_rank_by_evec(A,info_id_sets):
+def rank_subset_by_evec(A, id_set):
     # A - adjacency matrix
-    # info_id_sets - iterable of length k, where k managers, each element defines
-    #                the node ids that manager k knows about
+    # id_set - set of indices defineing the node ids in the submatrix
     # return:
     # 
-
-    ranks = list()
-    for k,ids in enumerate(info_id_sets):        
-        ranks.append(rank_by_evec((A[ids].T)[ids]))
-        # N = nrow(A)
-        # KK = num managers 
-        #  k * int(N/KK) back-converts to the right id in the global matrix for even size community
-    
-    return ranks 
+    # vector of ranked ids for the nodes in id_set
+    return np.array(id_set[rank_by_evec((A[id_set].T)[id_set])], dtype='int')
 
 def create_and_mask(N,ids):
     mask = np.zeros(N,dtype=bool)
@@ -44,38 +35,34 @@ def create_or_mask(N,ids):
     mask = mm.repmat(mask,N,1)          
     return np.logical_or(mask,mask.T)
 
-def ranks_to_ids(ranks, info_id_sets):
-    # ranks - iterable of indices of ranks
-    # info_id_sets - iterable of length k, where k managers, each element defines
-    #                the node ids that manager k knows abuot
-    #
-    # return:
-    # 
-    #
-    return [ids[rs] for ids, rs in zip(info_id_sets, ranks)]
 
 
-def get_ranked_nodes(A,rank_opts):
+def get_info_to_rank(rank_opts):
+    # returns
+    #   method to rank nodes this is a function that
+    #   takes adj mat A as an argument and returns a iterable of integer-vectors
+    #   that rank
     
     if rank_opts['type']=='random': # select node uniformly at random
-        ranks = np.random.permutation(len(A))
+        fn = lambda A: [np.random.permutation(len(A))]
         
     if rank_opts['type']=='evec': # select node by eigenvector centrality
-        info_ids = [np.arange(len(A))]
-        ranks = distributed_rank_by_evec(A, info_ids)
-        ranks = ranks_to_ids(ranks, info_ids)
-        ranks = np.array(list(chain.from_iterable(zip_longest(*ranks))))
+        # id_set here passed as all nodes in A
+        # returned in a list as supposed to return iterable of iterables
+        fn = lambda A: [rank_subset_by_evec(A, id_set=np.arange(len(A)))]
             
     if rank_opts['type']=='distributed_evec': # select node by distributed eigenvector centralities
         info_ids = rank_opts['info_id_sets']
-        ranks = distributed_rank_by_evec(A, info_ids)
-        ranks = ranks_to_ids(ranks, info_ids)
-        ranks = np.array(list(chain.from_iterable(zip_longest(*ranks))))
+        fn = lambda A: map(lambda ids: rank_subset_by_evec(A, ids), info_ids)
         
     if rank_opts['type']=='custom': # allow input of any function with any arguments
-        ranks = rank_opts['function'](A,rank_opts['arguments'])
-        
-    return ranks
+        fn = lambda A: rank_opts['function'](A,rank_opts['arguments'])
+
+    return fn
+
+
+def flatten_ranks(ranks):
+    return np.array(list(chain.from_iterable(zip_longest(*ranks))))
 
 def decrease_nodes_weights(A,node_ids,p=.5):
     ## TODO add management mask
@@ -83,9 +70,10 @@ def decrease_nodes_weights(A,node_ids,p=.5):
     mask = create_or_mask(N,node_ids) # the weights of these edges will decrease
     return A - (mask*A)*p 
 
-def decrease_top_nodes_weights(A,k,rank_opts,p=0.5):
-    ranks = get_ranked_nodes(A,rank_opts)
-    AA  = decrease_nodes_weights(A,ranks[:k],p)
+def decrease_top_nodes_weights(A, k, info_to_rank, p=0.5):
+    ranks = info_to_rank(A)
+    ranking = flatten_ranks(ranks)
+    AA  = decrease_nodes_weights(A,ranking[:k],p)
     return AA
 
 def manage_nodes(A, rank_opts,manage_opts):
@@ -109,11 +97,15 @@ def manage_nodes(A, rank_opts,manage_opts):
     # 
     budgets = rank_opts['budget']
     B = int(np.sum(budgets))
-    Ks = np.arange(0, np.sum(budgets), len(budgets), dtype='int')
+    Ks = np.arange(0, B, len(budgets), dtype='int')
+    info_to_rank = get_info_to_rank(rank_opts)
+
     #compute ranks just once
     if manage_opts['online']==False:
-        ranks = get_ranked_nodes(A,rank_opts)
-        # OR swap so this retuns a manager-element list with ranks in descending order
+        # logic: map a function across budgets that returns node_ids, ranked
+        ranks = info_to_rank(A) # retuns a manager-element list with ranks in descending order
+        ranking = flatten_ranks(ranks)
+
         # within each list
         # so add for loop here that encodes info logic of rankings (pooled or not)
 
@@ -125,7 +117,7 @@ def manage_nodes(A, rank_opts,manage_opts):
 
         lams = np.zeros(len(Ks)) # Ks is jumps by K= num managers
         for t,k in enumerate(Ks):
-            AA  = decrease_nodes_weights(A,node_ids=ranks[:k],p=manage_opts['p'])
+            AA  = decrease_nodes_weights(A,node_ids=ranking[:k],p=manage_opts['p'])
             lams[t],_ = get_dom_eval_and_evec(AA)
             
     if manage_opts['online']==True:
@@ -134,6 +126,6 @@ def manage_nodes(A, rank_opts,manage_opts):
         lams = np.ones(len(Ks))
         for t,k in enumerate(Ks):
             lams[t],_ = get_dom_eval_and_evec(AA)
-            AA = decrease_top_nodes_weights(AA,Ks[1]-Ks[0],rank_opts,p=manage_opts['p'])
+            AA = decrease_top_nodes_weights(AA, Ks[1]-Ks[0], info_to_rank, p=manage_opts['p'])
     
     return AA,lams
