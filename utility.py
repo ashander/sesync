@@ -34,9 +34,9 @@ def make_SBM(Ns,PI):
     id_sets = []
     for k in range(K):
         start = 0;
-        id_sets.append(list(np.arange(n[k],n[k+1])))
+        id_sets.append(np.array((np.arange(n[k],n[k+1]))))
 
-    return  (A + A.T),id_sets
+    return  (A + A.T), id_sets
 
 def uniform_weight_edges(A,mmax): # weight the edges
     N = np.shape(A)[0]
