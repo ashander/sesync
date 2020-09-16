@@ -82,9 +82,10 @@ def decrease_nodes_weights(A,node_ids,p=.5):
     mask = create_or_mask(N,node_ids) # the weights of these edges will decrease
     return A - (mask*A)*p 
 
-def decrease_top_nodes_weights(A, k, ranker, p=0.5):
+def decrease_top_nodes_weights(A, k, ranker, budgets, p=0.5):
     ranks = ranker(A)
-    global_rank = flatten_by_turns(ranks)
+    management_plans = manage_for_budget(ranks, budgets)
+    global_rank = flatten_by_turns(management_plans)
     AA  = decrease_nodes_weights(A, global_rank[:k], p)
     return AA
 
@@ -113,7 +114,7 @@ def manage_nodes(A, rank_opts,manage_opts):
     # rank_opts['budget'] -  iterable of length k, with each element an integer defining maximum budget
     # rank_opts['manage_id_sets'] -  iterable of length k, with each element an integer defining maximum budget
     #
-    # manage_opts['num_managers'] - num managers (optional) if not present set to len control_id_sets
+    # manage_opts['budget_step'] - step global budget e.g. by num managers (optional: if not present set to 1)
     # manage_opts['online'] - if true, adaptively compute management during selection, otherwise
     #                         compute management from inital state of network
     #
@@ -124,10 +125,9 @@ def manage_nodes(A, rank_opts,manage_opts):
     budgets = rank_opts['budget']
     B = int(np.sum(budgets))
     try:
-        K = manage_opts['num_managers']
+        K = manage_opts['budget_step']
     except KeyError:
-        K = len(budgets)
-    Ks = np.arange(0, B, K, dtype='int')
+        K = 1
     info_to_rank = get_info_to_rank(rank_opts)
     info_to_control = get_info_to_control(info_to_rank, rank_opts)
 
@@ -142,7 +142,9 @@ def manage_nodes(A, rank_opts,manage_opts):
 
         global_rank = flatten_by_turns(management_plans)
 
-        lams = np.zeros(len(Ks)) # Ks is jumps by K= num managers
+        # here total budget Ks jumps by K= num managers
+        Ks = np.arange(0, B, K, dtype='int')
+        lams = np.zeros(len(Ks))
         for t,k in enumerate(Ks):
             AA  = decrease_nodes_weights(A,node_ids=global_rank[:k],p=manage_opts['p'])
             lams[t],_ = get_dom_eval_and_evec(AA)
@@ -153,10 +155,17 @@ def manage_nodes(A, rank_opts,manage_opts):
         # this conflates the budget determination and the Ks steps --
         # could cause errors so should find a better way to do this
         AA = A.copy()
+
+        # here total budget Ks maxes out at the sum of the
+        # effective budget (min budget or number mgr can control)
+        # we look at each budget in turn rather than jumping by K
+        B = sum(min(b, len(cs)) for b, cs in zip(budgets, rank_opts['control_id_sets']))
+        Ks = np.arange(0, B, K, dtype='int')
         lams = np.ones(len(Ks))
         for t,k in enumerate(Ks):
             lams[t],_ = get_dom_eval_and_evec(AA)
             AA = decrease_top_nodes_weights(AA, k=Ks[1]-Ks[0],
-                    ranker=info_to_control, p=manage_opts['p'])
+                    ranker=info_to_control, budgets=budgets,
+                    p=manage_opts['p'])
     
     return AA, lams, Ks
